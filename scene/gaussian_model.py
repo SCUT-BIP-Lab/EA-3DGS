@@ -434,7 +434,7 @@ class GaussianModel:
         value_nth_percentile = sorted_tensor[index_nth_percentile]
         prune_mask = (import_score <= value_nth_percentile).squeeze()
         # Add curvature densification
-        prune_mask =  torch.logical_or(prune_mask, self.curvature_densification_mask())
+        prune_mask =  torch.logical_and(prune_mask, self.curvature_densification_mask())
         self.prune_points(prune_mask)
 
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
