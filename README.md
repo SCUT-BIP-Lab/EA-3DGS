@@ -49,7 +49,8 @@ python metrics.py -m $OUTPUT_PATH --gs_type gs_mesh
 Visual comparisons on Mill-19 and MatrixCity dataset:
 ![image](https://github.com/user-attachments/assets/ef0d4016-07a4-485e-8a50-2d24ce816d60)
 Visual comparisons on WHU dataset and Plateau Region scenes:
-![image](https://github.com/user-attachments/assets/02bbeb52-6000-40f1-b025-b5ecdd024d19)
+![1730015893879](https://github.com/user-attachments/assets/1da2066e-9e3a-4813-9aa3-c766e941eec3)
+
 
 ## Acknowledgements
 Our code is derived from many great repositories, appreciate their outstanding work.
