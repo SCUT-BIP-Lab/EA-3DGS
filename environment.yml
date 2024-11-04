@@ -21,3 +21,4 @@ dependencies:
     - submodules/simple-knn
     - icecream
     - scikit-learn
+    - bitarray

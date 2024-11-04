@@ -180,24 +180,33 @@ class GaussianModel:
                 param_group['lr'] = lr
                 return lr
 
-    def construct_list_of_attributes(self):
-        l = ['x', 'y', 'z', 'nx', 'ny', 'nz']
+    def construct_list_of_attributes(self, save_att=None):
+        # l = ['x', 'y', 'z', 'nx', 'ny', 'nz']
+        l = []
+        if 'xyz' in save_att:
+            l += ['x', 'y', 'z']
+        if 'normals' in save_att:
+            l += ['nx', 'ny', 'nz']
         # All channels except the 3 DC
-        for i in range(self._features_dc.shape[1]*self._features_dc.shape[2]):
-            l.append('f_dc_{}'.format(i))
-        for i in range(self._features_rest.shape[1]*self._features_rest.shape[2]):
-            l.append('f_rest_{}'.format(i))
+        if 'f_dc' in save_att:
+            for i in range(self._features_dc.shape[1]*self._features_dc.shape[2]):
+                l.append('f_dc_{}'.format(i))
+        if 'f_rest' in save_att:
+            for i in range(self._features_rest.shape[1]*self._features_rest.shape[2]):
+                l.append('f_rest_{}'.format(i))
         l.append('opacity')
-        for i in range(self._scaling.shape[1]):
-            l.append('scale_{}'.format(i))
-        for i in range(self._rotation.shape[1]):
-            l.append('rot_{}'.format(i))
+        if 'scale' in save_att:
+            for i in range(self._scaling.shape[1]):
+                l.append('scale_{}'.format(i))
+        if 'rotation' in save_att:
+            for i in range(self._rotation.shape[1]):
+                l.append('rot_{}'.format(i))
         return l
 
-    def save_ply(self, path):
-        self._save_ply(path)
+    def save_ply(self, path, save_q=[], save_attributes=None):
+        self._save_ply(path,save_q,save_attributes)
 
-    def _save_ply(self, path):
+    def _save_ply(self, path, save_q=[], save_attributes=None):
         mkdir_p(os.path.dirname(path))
 
         xyz = self._xyz.detach().cpu().numpy()
@@ -207,11 +216,26 @@ class GaussianModel:
         opacities = self._opacity.detach().cpu().numpy()
         scale = self._scaling.detach().cpu().numpy()
         rotation = self._rotation.detach().cpu().numpy()
-
-        dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
+        
+        if 'pos' in save_q:
+            xyz = self._xyz_q.detach().cpu().numpy()
+        if 'dc' in save_q or 'sh_dc' in save_q:
+            f_dc = self._features_dc_q.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        if 'sh' in save_q or 'sh_dc' in save_q:
+            f_rest = self._features_rest_q.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        if 'scale' in save_q or 'scale_rot' in save_q:
+            scale = self._scaling_q.detach().cpu().numpy()
+        if 'rot' in save_q or 'scale_rot' in save_q:
+            rotation = self._rotation_q.detach().cpu().numpy()
+        all_attributes = {'xyz': xyz, 'f_dc': f_dc, 'f_rest': f_rest, 'opacities': opacities,
+                          'scale': scale, 'rotation': rotation}
+        if save_attributes is None:
+            save_attributes = list(all_attributes.keys())
+            
+        dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes(save_attributes)]
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
+        attributes = np.concatenate(tuple([val for (key, val) in all_attributes.items() if key in save_attributes]), axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)

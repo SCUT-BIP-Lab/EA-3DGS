@@ -10,9 +10,11 @@
 #
 
 import os
+from os.path import join
 import torch
 from random import randint
 from utils.loss_utils import l1_loss, ssim
+from bitarray import bitarray
 from renderer.gaussian_renderer import render, network_gui
 import sys
 from scene import Scene
@@ -22,6 +24,7 @@ from games import (
     gaussianModel
 )
 
+import numpy as np
 from utils.general_utils import safe_state
 import uuid
 from tqdm import tqdm
@@ -75,7 +78,7 @@ def training(gs_type, dataset, opt, pipe, testing_iterations, saving_iterations,
     n_cls_dc = 4096
     n_it = 10
     kmeans_st_iter = 15000
-    freq_cls_assn = 100
+    freq_cls_assn = 1000
     if 'pos' in quantized_params:
         kmeans_pos_q = Quantize_kMeans(num_clusters=n_cls_dc, num_iters=n_it)
     if 'dc' in quantized_params:
@@ -123,6 +126,33 @@ def training(gs_type, dataset, opt, pipe, testing_iterations, saving_iterations,
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack) - 1))
+        
+        
+        if iteration > 3100:
+            freq_cls_assn = 100
+            if iteration > (opt.iterations - 5000):
+                freq_cls_assn = 5000
+            
+        # quantize params
+        if iteration > kmeans_st_iter:
+            if iteration % freq_cls_assn == 1:
+                assign = True
+            else:
+                assign = False
+            if 'pos' in quantized_params:
+                kmeans_pos_q.forward_pos(gaussians, assign=assign)
+            if 'dc' in quantized_params:
+                kmeans_dc_q.forward_dc(gaussians, assign=assign)
+            if 'sh' in quantized_params:
+                kmeans_sh_q.forward_frest(gaussians, assign=assign)
+            if 'scale' in quantized_params:
+                kmeans_sc_q.forward_scale(gaussians, assign=assign)
+            if 'rot' in quantized_params:
+                kmeans_rot_q.forward_rot(gaussians, assign=assign)
+            if 'scale_rot' in quantized_params:
+                kmeans_scrot_q.forward_scale_rot(gaussians, assign=assign)
+            if 'sh_dc' in quantized_params:
+                kmeans_shdc_q.forward_dcfrest(gaussians, assign=assign)
 
         # Render
         if (iteration - 1) == debug_from:
@@ -156,7 +186,23 @@ def training(gs_type, dataset, opt, pipe, testing_iterations, saving_iterations,
                             testing_iterations, scene, render, (pipe, background))
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
-                scene.save(iteration)
+                # scene.save(iteration)
+                # Save only the non-quantized parameters in ply file.
+                all_attributes = {'xyz': 'xyz', 'dc': 'f_dc', 'sh': 'f_rest', 'opacities': 'opacities',
+                                  'scale': 'scale', 'rot': 'rotation'}
+                save_attributes = [val for (key, val) in all_attributes.items() if key not in quantized_params]
+                if iteration > kmeans_st_iter:
+                    scene.save(iteration, save_q=quantized_params, save_attributes=save_attributes)
+                    
+                    # Save indices and codebook for quantized parameters
+                    kmeans_dict = {'rot': kmeans_rot_q, 'scale': kmeans_sc_q, 'sh': kmeans_sh_q, 'dc': kmeans_dc_q}
+                    kmeans_list = []
+                    for param in quantized_params:
+                        kmeans_list.append(kmeans_dict[param])
+                    out_dir = join(scene.model_path, 'point_cloud/iteration_%d' % iteration)
+                    save_kmeans(kmeans_list, quantized_params, out_dir)
+                else:
+                    scene.save(iteration, save_q=[])
 
             # Densification
             if (args.gs_type == "gs") or (args.gs_type == "gs_flat"):
@@ -205,6 +251,44 @@ def training(gs_type, dataset, opt, pipe, testing_iterations, saving_iterations,
         if hasattr(gaussians, 'prepare_scaling_rot'):
             gaussians.prepare_scaling_rot()
 
+def dec2binary(x, n_bits=None):
+    """Convert decimal integer x to binary.
+
+    Code from: https://stackoverflow.com/questions/55918468/convert-integer-to-pytorch-tensor-of-binary-bits
+    """
+    if n_bits is None:
+        n_bits = torch.ceil(torch.log2(x)).type(torch.int64)
+    mask = 2**torch.arange(n_bits-1, -1, -1).to(x.device, x.dtype)
+    return x.unsqueeze(-1).bitwise_and(mask).ne(0)
+    
+    
+
+def save_kmeans(kmeans_list, quantized_params, out_dir):
+    """Save the codebook and indices of KMeans.
+
+    """
+    # Convert to bitarray object to save compressed version
+    # saving as npy or pth will use 8bits per digit (or boolean) for the indices
+    # Convert to binary, concat the indices for all params and save.
+    bitarray_all = bitarray([])
+    for kmeans in kmeans_list:
+        n_bits = int(np.ceil(np.log2(len(kmeans.cls_ids))))
+        assignments = dec2binary(kmeans.cls_ids, n_bits)
+        bitarr = bitarray(list(assignments.cpu().numpy().flatten()))
+        bitarray_all.extend(bitarr)
+    with open(join(out_dir, 'kmeans_inds.bin'), 'wb') as file:
+        bitarray_all.tofile(file)
+
+    # Save details needed for loading
+    args_dict = {}
+    args_dict['params'] = quantized_params
+    args_dict['n_bits'] = n_bits
+    args_dict['total_len'] = len(bitarray_all)
+    np.save(join(out_dir, 'kmeans_args.npy'), args_dict)
+    centers_dict = {param: kmeans.centers for (kmeans, param) in zip(kmeans_list, quantized_params)}
+
+    # Save codebook
+    torch.save(centers_dict, join(out_dir, 'kmeans_centers.pth'))
 
 def prepare_output_and_logger(args):
     if not args.model_path:
